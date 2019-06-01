@@ -82,7 +82,7 @@ import qualified App
 import qualified Control.Monad.IO.Class as IO
 
 libMain :: IO ()
-libMain = runApp defaultConfig $ do
+libMain = App.runApp App.defaultConfig $ do
   IO.liftIO $ putStrLn "Hello, World"
 
 {-# START_FILE src/App.hs #-}
@@ -101,6 +101,9 @@ data AppException = GeneralException String deriving (Eq, Show)
 
 -- | Cfg contains the configured state of the application
 data Cfg = Cfg
+
+defaultConfig :: Cfg
+defaultConfig = Cfg
 
 {-# START_FILE test/Spec.hs #-}
 main :: IO ()
