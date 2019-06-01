@@ -96,6 +96,10 @@ newtype AppT m a = AppT
   { runAppT :: ExceptT AppException (ReaderT Cfg m) a
   } deriving (Functor,Applicative,Monad,MonadIO,MonadReader Cfg, MonadError AppException)
 
+runApp :: (Monad m, MonadFail m) => Cfg -> AppT m a -> m a
+runApp cfg =
+  (>>= raiseAppException) . flip runReaderT cfg . runExceptT . runAppT
+
 -- | Add exception types here
 data AppException = GeneralException String deriving (Eq, Show)
 
