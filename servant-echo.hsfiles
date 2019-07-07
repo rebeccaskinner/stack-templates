@@ -152,7 +152,12 @@ type AppServer a = Servant.ServerT a (AppT IO)
 
 -- | AppException is a general purpose exception wrapper used for
 -- raising application exceptions
-data AppException = GeneralException String deriving (Eq, Show)
+data AppException = GeneralException String
+                  | WebserverError Servant.ServantErr
+                  deriving (Eq, Show)
+
+serverErr :: (Monad m, MonadFail m) => Servant.ServantErr -> AppT m a
+serverErr = throwError . WebserverError
 
 -- | General configuration data.  We're storing a logger handle in the
 -- global environment rather than using an additional transformer for
@@ -181,15 +186,16 @@ logInfo     = log Log.LogInfo
 logDebug    = log Log.LogDebug
 logVerbose  = log Log.LogVerbose
 
-
 raiseAppException :: (Monad m, MonadFail m) => Either AppException a -> m a
 raiseAppException e = case e of
   Left err -> Control.Monad.Fail.fail . show $ err
   Right a  -> return a
 
 runApp :: (Monad m, MonadFail m) => Cfg m -> AppT m a -> m a
-runApp cfg =
-  (>>= raiseAppException) . flip runReaderT cfg . runExceptT . runAppT
+runApp cfg = (>>= raiseAppException) . runApp' cfg
+
+runApp' :: (Monad m, MonadFail m) => Cfg m -> AppT m a -> m (Either AppException a)
+runApp' cfg = flip runReaderT cfg . runExceptT . runAppT
 
 getCfg :: IO (Cfg IO)
 getCfg = return $ Cfg defaultLogger
@@ -204,10 +210,21 @@ import Network.Wai.Handler.Warp
 import Servant
 import Control.Monad.Reader
 import Server
+import qualified Data.ByteString.Lazy.Char8 as BL
 
 -- | appToHandler lets us hoist our application monad into a handler.
 appToHandler :: Cfg IO -> AppT IO a -> Handler a
-appToHandler c m = liftIO $ runApp c m
+appToHandler cfg m = do
+  appVal <- liftIO $ runApp' cfg m
+  case appVal of
+    Left ex -> handleError ex
+    Right ok -> return ok
+  where
+    handleError :: AppException -> Handler a
+    handleError ex =
+      case ex of
+        WebserverError servantErr -> throwError servantErr
+        GeneralException msg -> throwError $ err500 { errBody = BL.pack msg }
 
 startApp :: IO ()
 startApp = do
