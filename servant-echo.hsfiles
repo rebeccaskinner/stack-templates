@@ -1,0 +1,429 @@
+{-# START_FILE {{name}}.cabal #-}
+name:                {{name}}
+version:             0.1.0.0
+license:             BSD3
+license-file:        LICENSE
+homepage:            https://github.com/{{github-username}}{{^github-username}}githubuser{{/github-username}}/{{name}}#readme
+author:              {{author-name}}{{^author-name}}Author name here{{/author-name}}
+maintainer:          {{author-email}}{{^author-email}}example@example.com{{/author-email}}
+copyright:           {{copyright}}{{^copyright}}{{year}}{{^year}}2019{{/year}} {{author-name}}{{^author-name}}Author name here{{/author-name}}{{/copyright}}
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Server
+                     , App
+                     , Lib
+                     , Logger
+                     , RawHTML
+                     , Request
+  build-depends:       base >= 4.7 && < 5
+                     , aeson
+                     , servant-server
+                     , wai
+                     , warp
+                     , mtl
+                     , containers
+                     , bytestring
+                     , http-media
+                     , text
+  default-language:    Haskell2010
+  default-extensions: GADTs
+                    , OverloadedStrings
+                    , LambdaCase
+                    , RankNTypes
+                    , FlexibleContexts
+                    , FlexibleInstances
+                    , ScopedTypeVariables
+                    , TypeApplications
+                    , TypeFamilies
+                    , BangPatterns
+                    , ExistentialQuantification
+                    , FunctionalDependencies
+                    , MultiParamTypeClasses
+                    , DeriveFunctor
+                    , GeneralizedNewtypeDeriving
+                    , DeriveGeneric
+                    , DataKinds
+                    , TypeOperators
+
+executable {{name}}
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , {{name}}
+  default-language:    Haskell2010
+  default-extensions: GADTs
+                    , OverloadedStrings
+                    , LambdaCase
+                    , RankNTypes
+                    , FlexibleContexts
+                    , FlexibleInstances
+                    , ScopedTypeVariables
+                    , TypeApplications
+                    , TypeFamilies
+                    , BangPatterns
+                    , ExistentialQuantification
+                    , FunctionalDependencies
+                    , MultiParamTypeClasses
+                    , DeriveFunctor
+                    , GeneralizedNewtypeDeriving
+                    , DeriveGeneric
+                    , DataKinds
+                    , TypeOperators
+
+test-suite {{name}}-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , {{name}}
+                     , hspec
+                     , hspec-expectations-lifted
+                     , hspec-wai
+                     , hspec-wai-json
+                     , aeson
+                     , text
+                     , mtl
+                     , transformers
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+  default-extensions: GADTs
+                    , OverloadedStrings
+                    , LambdaCase
+                    , RankNTypes
+                    , FlexibleContexts
+                    , FlexibleInstances
+                    , ScopedTypeVariables
+                    , TypeApplications
+                    , TypeFamilies
+                    , BangPatterns
+                    , ExistentialQuantification
+                    , FunctionalDependencies
+                    , MultiParamTypeClasses
+                    , DeriveFunctor
+                    , GeneralizedNewtypeDeriving
+                    , DeriveGeneric
+                    , DataKinds
+                    , TypeOperators
+
+{-# START_FILE Setup.hs #-}
+import Distribution.Simple
+main = defaultMain
+
+{-# START_FILE README.md #-}
+# {{name}}
+
+{-# START_FILE app/Main.hs #-}
+module Main where
+import qualified Lib
+
+main :: IO ()
+main = Lib.startApp
+
+{-# START_FILE src/App.hs #-}
+module App where
+
+import           Control.Monad.Except
+import           Control.Monad.Fail
+import           Control.Monad.Reader
+import qualified Data.ByteString.Lazy.Char8 as BC
+import qualified Data.Text                  as Text
+import qualified Logger                     as Log
+import           Prelude                    hiding (log)
+import qualified Servant                    as Servant
+import           System.Environment         (getArgs)
+
+-- | The AppT monad represents the application state
+newtype AppT m a = AppT
+  { runAppT :: ExceptT AppException (ReaderT (Cfg m) m) a
+  } deriving (Functor,Applicative,Monad,MonadIO,MonadError AppException, MonadReader (Cfg m))
+
+instance MonadTrans AppT where
+  lift m = AppT . ExceptT . ReaderT $ const (Right <$> m)
+
+-- | AppServer a is a basic wrapper around a ServerT to improve
+-- readability when we hoist AppT into the ServerT monad.
+type AppServer a = Servant.ServerT a (AppT IO)
+
+-- | AppException is a general purpose exception wrapper used for
+-- raising application exceptions
+data AppException = GeneralException String deriving (Eq, Show)
+
+-- | General configuration data.  We're storing a logger handle in the
+-- global environment rather than using an additional transformer for
+-- simplicity and to allow local loggers to supercede the general
+-- global logger.
+data Cfg m = Cfg
+  { _configLogger   :: Log.LogHandle m
+  }
+
+-- | the default logger logs debug or higher messages to stderr
+defaultLogger :: Log.LogHandle IO
+defaultLogger =
+  Log.filterLogs Log.LogDebug Log.stderrLogger'
+
+-- | log a message with an arbitrary priority
+log :: (Monad m, MonadIO m) => Log.LogPriority -> Text.Text -> AppT m ()
+log priority msg = do
+  logHandle <- asks _configLogger
+  lift $ Log.log logHandle priority msg
+
+logErr, logWarn, logInfo, logDebug, logVerbose ::
+  (Monad m, MonadIO m) => Text.Text -> AppT m ()
+logErr      = log Log.LogErr
+logWarn     = log Log.LogWarn
+logInfo     = log Log.LogInfo
+logDebug    = log Log.LogDebug
+logVerbose  = log Log.LogVerbose
+
+
+raiseAppException :: (Monad m, MonadFail m) => Either AppException a -> m a
+raiseAppException e = case e of
+  Left err -> Control.Monad.Fail.fail . show $ err
+  Right a  -> return a
+
+runApp :: (Monad m, MonadFail m) => Cfg m -> AppT m a -> m a
+runApp cfg =
+  (>>= raiseAppException) . flip runReaderT cfg . runExceptT . runAppT
+
+getCfg :: IO (Cfg IO)
+getCfg = return $ Cfg defaultLogger
+
+
+{-# START_FILE src/Lib.hs #-}
+module Lib (startApp, app) where
+
+import App
+import Network.Wai
+import Network.Wai.Handler.Warp
+import Servant
+import Control.Monad.Reader
+import Server
+
+-- | appToHandler lets us hoist our application monad into a handler.
+appToHandler :: Cfg IO -> AppT IO a -> Handler a
+appToHandler c m = liftIO $ runApp c m
+
+startApp :: IO ()
+startApp = do
+  cfg <- getCfg
+  run 8080 (app cfg)
+
+app :: Cfg IO -> Application
+app cfg = serve api (server cfg)
+
+api :: Proxy API
+api = Proxy
+
+server :: Cfg IO -> Server API
+server cfg = hoistServer api (appToHandler cfg) appTserver
+
+
+{-# START_FILE src/Logger.hs #-}
+{-# LANGUAGE BangPatterns #-}
+module Logger ( LogPriority (..)
+              , LogHandle (..)
+              , filterLogs
+              , stdoutLogger , stdoutLogger'
+              , stderrLogger , stderrLogger'
+              , logErr, logWarn, logInfo, logDebug, logVerbose
+              ) where
+
+import qualified Control.Concurrent     as Concurrent
+import qualified Control.Monad.IO.Class as IO
+import qualified Data.String            as String
+import qualified Data.Text              as Text
+import qualified Data.Text.IO           as Text
+import           Prelude                hiding (log)
+import qualified System.IO              as IO
+import qualified System.IO.Unsafe       as Unsafe
+
+data LogPriority = LogErr
+                 | LogWarn
+                 | LogInfo
+                 | LogDebug
+                 | LogVerbose
+                 deriving (Eq, Enum, Ord)
+
+priorityIndicator :: String.IsString s => LogPriority -> s
+priorityIndicator p =
+  case p of
+    LogErr     -> "[ERROR]"
+    LogWarn    -> "[WARN]"
+    LogInfo    -> "[INFO]"
+    LogDebug   -> "[DEBUG]"
+    LogVerbose -> "[DEBUG]"
+
+newtype LogHandle m = LogHandle { log :: LogPriority -> Text.Text -> m () }
+
+logHandle :: IO.Handle -> IO (LogHandle IO)
+logHandle !hndl = do
+  mutex <- Concurrent.newMVar ()
+  let logFunc !priority !msg =
+        Concurrent.withMVar mutex $ \() ->
+          Text.hPutStrLn hndl $ priorityIndicator priority <> ": " <> msg
+  return $ LogHandle logFunc
+
+filterLogs :: Monad m => LogPriority -> LogHandle m -> LogHandle m
+filterLogs prio hndl =
+  LogHandle $ \prio' msg ->
+    if prio' <= prio then log hndl prio msg else return ()
+
+stdoutLogger, stderrLogger :: IO (LogHandle IO)
+stdoutLogger = logHandle IO.stdout
+stderrLogger = logHandle IO.stderr
+
+stdoutLogger', stderrLogger' :: LogHandle IO
+stdoutLogger' = Unsafe.unsafePerformIO stdoutLogger
+stderrLogger' = Unsafe.unsafePerformIO stderrLogger
+
+logErr, logWarn, logInfo, logDebug, logVerbose ::
+  LogHandle m -> Text.Text -> m ()
+logErr     = flip log LogErr
+logWarn    = flip log LogWarn
+logInfo    = flip log LogInfo
+logDebug   = flip log LogDebug
+logVerbose = flip log LogVerbose
+
+
+{-# START_FILE src/RawHTML.hs #-}
+module RawHTML where
+
+import Network.HTTP.Media.MediaType ((//))
+import Servant
+import qualified Data.ByteString.Lazy.Char8 as BC
+
+-- | HTML is a stub type to allow us to pass raw data with an HTML
+-- | content type.
+data RawHTML
+
+instance Accept RawHTML where
+  contentType _ = "text" // "html"
+
+instance MimeRender RawHTML String where
+  mimeRender _ a = BC.pack a
+
+instance MimeRender RawHTML BC.ByteString where
+  mimeRender _ = id
+
+
+{-# START_FILE src/Request.hs #-}
+module Request (EchoRequest (..)) where
+import qualified Data.Aeson   as Aeson
+import qualified Data.Text    as Text
+import qualified GHC.Generics as GHC
+
+data EchoRequest = EchoRequest { echoData :: Text.Text } deriving(GHC.Generic)
+instance Aeson.ToJSON EchoRequest
+instance Aeson.FromJSON EchoRequest
+
+
+{-# START_FILE src/Server.hs #-}
+{-# LANGUAGE DataKinds       #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators   #-}
+{-# LANGUAGE BangPatterns    #-}
+module Server where
+import App
+import RawHTML
+import Request
+import Servant
+import qualified Data.Text as Text
+
+
+type API = "echo" :> ReqBody '[JSON] EchoRequest :> Post '[JSON] String
+           :<|> Get '[RawHTML] String
+
+appTserver :: AppServer API
+appTserver = echo :<|> showRoot
+
+
+echo :: EchoRequest -> AppT IO String
+echo (EchoRequest msg) = do
+  logDebug $ "echoing back message: " <> msg
+  return $ Text.unpack msg
+
+showRoot :: AppT IO String
+showRoot =  do
+  logDebug "returning /"
+  return "<h1>Hello, World</h1>"
+
+
+{-# START_FILE test/Spec.hs #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes       #-}
+module Main (main) where
+
+import qualified App
+import           Control.Concurrent
+import qualified Data.Text           as Text
+import qualified Lib
+import           Logger
+import           System.IO.Unsafe    (unsafePerformIO)
+import           Test.Hspec
+import qualified Test.Hspec.Expectations.Lifted as Expect
+import           Test.Hspec.Wai
+import           Test.Hspec.Wai.JSON
+import Control.Monad.Trans
+
+logs :: MVar [(LogPriority, Text.Text)]
+logs = unsafePerformIO $ newMVar []
+
+testCfg :: App.Cfg IO
+testCfg = App.Cfg testLogger
+
+testLogger = LogHandle $
+  \priority msg -> do
+    logs' <- takeMVar logs
+    putMVar logs $ (priority, msg) : logs'
+
+logsCount :: MVar [a] -> IO Int
+logsCount = (length <$>) . readMVar
+
+main :: IO ()
+main = hspec spec
+
+spec :: Spec
+spec = with (return $ Lib.app testCfg) $ do
+  describe "GET /users" $ do
+    it "responds with 200" $ do
+      get "/" `shouldRespondWith` 200
+      (liftIO $ logsCount logs) `Expect.shouldReturn` 1
+
+
+{-# START_FILE LICENSE #-}
+Copyright {{author-name}}{{^author-name}}Author name here{{/author-name}} (c) {{year}}{{^year}}2019{{/year}}
+
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+
+    * Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+
+    * Neither the name of {{author-name}}{{^author-name}}Author name here{{/author-name}} nor the names of other
+      contributors may be used to endorse or promote products derived
+      from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
